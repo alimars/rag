@@ -10,7 +10,7 @@ services:
       - open-webui:/app/backend/data
     restart: unless-stopped
   ddg-scraper-tool:
-    build: .
+    build: ./websearch
     container_name: ddg_playwright_tool
     environment:
       - Summarizer_HOST=host.docker.internal:11434
