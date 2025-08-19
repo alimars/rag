@@ -1,0 +1,17 @@
+fastapi>=0.110.0
+uvicorn>=0.29.0
+ollama>=0.1.10
+langchain>=0.1.16
+langchain-community>=0.2.0
+langchain-ollama==0.3.6
+langchain-unstructured==0.1.6
+pytesseract>=0.3.10
+pdf2image>=1.17.0
+rank-bm25>=0.2.2
+scikit-learn>=1.4.0
+chromadb>=0.4.24
+numpy>=1.26.0
+langid>=1.1.6
+unstructured==0.12.0
+faiss-cpu==1.8.0
+requests>=2.31.0
