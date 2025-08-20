@@ -13,7 +13,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 class RetrievalSystem:
     def __init__(self, index):
         self.index = index
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         reranker_model = os.getenv("RERANKER_MODEL", "mxbai-rerank-large")
         self.reranker = OllamaLLM(base_url=ollama_base_url, model=reranker_model, temperature=0)
     
@@ -45,14 +45,16 @@ class RetrievalSystem:
     def reciprocal_rank_fusion(self, rankings, k=60):
         fused_scores = {}
         doc_map = {}  # Map to store doc_id -> doc mappings
+        score_map = {}  # Map to store doc_id -> similarity score mappings
         for rank, docs in enumerate(rankings):
-            for i, doc in enumerate(docs):
+            for i, (doc, similarity_score) in enumerate(docs):
                 doc_id = id(doc)
                 doc_map[doc_id] = doc  # Store the actual document
+                score_map[doc_id] = similarity_score  # Store the similarity score
                 fused_scores[doc_id] = fused_scores.get(doc_id, 0) + 1/(k + i + rank + 1)
         # Return both scores and documents
         sorted_docs = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
-        return [(doc_id, score, doc_map[doc_id]) for doc_id, score in sorted_docs]
+        return [(doc_map[doc_id], fused_score, score_map[doc_id]) for doc_id, fused_score in sorted_docs]
     
     def retrieve(self, query, top_k=10):
         # Generate cache key
@@ -85,22 +87,55 @@ class RetrievalSystem:
         # RAG-Fusion
         all_rankings = [original_results] + multi_results + decomposed_results
         fused = self.reciprocal_rank_fusion(all_rankings)
-        fused_docs = [doc for doc_id, score, doc in fused[:top_k*2]]
+        # Extract documents and scores from fused results
+        fused_docs_with_scores = [(doc, similarity_score) for doc, fused_score, similarity_score in fused[:top_k*2]]
         
         # Re-ranking
         rerank_prompt = "\n".join([
             f"Document {i+1}: {doc.page_content[:500]}{'...' if len(doc.page_content) > 500 else ''}"
-            for i, doc in enumerate(fused_docs)
+            for i, (doc, score) in enumerate(fused_docs_with_scores)
         ])
-        rerank_prompt = f"Query: {query}\n\nRank these by relevance (comma-separated numbers 1-{len(fused_docs)}):\n{rerank_prompt}"
+        rerank_prompt = f"Query: {query}\n\nRank these by relevance (comma-separated numbers 1-{len(fused_docs_with_scores)}):\n{rerank_prompt}"
         
         try:
             ranking_order = self.reranker.invoke(rerank_prompt)
             ranked_ids = [int(x.strip()) - 1 for x in ranking_order.split(",")]
-            results = [fused_docs[i] for i in ranked_ids[:top_k]]
+            reranked_results = [fused_docs_with_scores[i] for i in ranked_ids[:top_k]]
         except Exception as e:
             print(f"Re-ranking failed: {str(e)}")
-            results = fused_docs[:top_k]
+            reranked_results = fused_docs_with_scores[:top_k]
+        
+        # Format results with metadata
+        results = []
+        for doc, similarity_score in reranked_results:
+            # Extract metadata if available
+            metadata = getattr(doc, 'metadata', {})
+            
+            # Create structured result
+            result = {
+                'content': doc.page_content,
+                'score': similarity_score,
+                'metadata': metadata
+            }
+            
+            # Add specific metadata fields if available
+            if 'page' in metadata:
+                result['page'] = metadata['page']
+            else:
+                result['page'] = 1  # Default to page 1 if not available
+            if 'chunk_id' in metadata:
+                result['chunk_id'] = metadata['chunk_id']
+            else:
+                # Generate a default chunk_id if not available
+                source = metadata.get('source', 'unknown')
+                filename = os.path.basename(source)
+                filename_without_ext = os.path.splitext(filename)[0]
+                result['chunk_id'] = f"{filename_without_ext}_chunk_0000"
+                
+            results.append(result)
+        
+        # Sort results by score in descending order
+        results.sort(key=lambda x: x['score'], reverse=True)
         
         # Save to cache
         self.save_to_cache(cache_key, results)

@@ -10,8 +10,13 @@ pdf2image>=1.17.0
 rank-bm25>=0.2.2
 scikit-learn>=1.4.0
 chromadb>=0.4.24
-numpy>=1.26.0
+numpy==1.26.4  # Pinned to 1.x version for FAISS compatibility (FAISS was compiled with NumPy 1.x)
 langid>=1.1.6
 unstructured==0.12.0
 faiss-cpu==1.8.0
 requests>=2.31.0
+langchain_text_splitters>=0.2.0
+langchain_core>=0.1.0
+pydantic>=2.0.0
+pdfminer.six>=20221105
+pdfplumber>=0.10.0

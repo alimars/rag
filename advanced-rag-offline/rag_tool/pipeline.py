@@ -3,6 +3,7 @@ from rag_tool.indexing import MultiRepresentationIndex
 from rag_tool.retrieval import RetrievalSystem
 from rag_tool.translation import OfflineTranslationSystem
 from langchain_ollama import OllamaLLM
+from langchain_core.documents import Document
 import os
 import hashlib
 import pickle
@@ -11,21 +12,36 @@ import pickle
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# Global pipeline instance
+_PIPELINE_INSTANCE = None
+
 class FocusedRAGPipeline:
+    def __new__(cls, data_path, language="en"):
+        """Ensure only one pipeline instance is created and shared"""
+        global _PIPELINE_INSTANCE
+        if _PIPELINE_INSTANCE is None:
+            _PIPELINE_INSTANCE = super(FocusedRAGPipeline, cls).__new__(cls)
+        return _PIPELINE_INSTANCE
+    
     def __init__(self, data_path, language="en"):
+        # Check if already initialized to prevent duplicate initialization
+        if hasattr(self, '_initialized'):
+            return
+            
         self.data_path = data_path
         self.language = language
         self.index = None
         self.retriever = None
         print("Initializing generator with llama3:8b model...")
         import os
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         generator_model = os.getenv("GENERATOR_MODEL", "llama3:8b")
         print(f"Using Ollama base URL for generator: {ollama_base_url}")
         print(f"Using generator model: {generator_model}")
         self.generator = OllamaLLM(model=generator_model, base_url=ollama_base_url)
         self.translator = OfflineTranslationSystem()
         self.is_initialized = False
+        self._initialized = True
     
     def get_cache_key(self, question, target_lang=None):
         """Generate a cache key based on question and parameters"""
@@ -54,6 +70,7 @@ class FocusedRAGPipeline:
     
     def initialize(self):
         if self.is_initialized:
+            print("✅ Pipeline already initialized, skipping initialization")
             return True
             
         print("🔄 Initializing RAG pipeline...")
@@ -133,17 +150,39 @@ class FocusedRAGPipeline:
             print(f"🌐 Translated query: {translated_query}")
             
             # Retrieve relevant documents
-            context_docs = self.retriever.retrieve(translated_query)
-            print(f"🔍 Retrieved {len(context_docs)} documents")
+            context_results = self.retriever.retrieve(translated_query)
+            print(f"🔍 Retrieved {len(context_results)} documents")
             
-            # Return original documents directly
-            original_content = "\n\n".join(
-                [f"Source: {doc.metadata.get('source', 'Unknown')}\n{doc.page_content}"
-                 for doc in context_docs]
-            )
+            # Convert results to tuples for backward compatibility
+            context_docs_with_scores = [
+                (Document(page_content=result['content'], metadata=result['metadata']), result['score'])
+                for result in context_results
+            ]
+            
+            # Return original documents directly with metadata and scores
+            original_content = "\n\n".join([
+                f"Source: {doc.metadata.get('source', 'Unknown')}\n"
+                f"Page: {doc.metadata.get('page', 1)}\n"
+                f"Chunk ID: {doc.metadata.get('chunk_id', 'unknown_chunk_0000')}\n"
+                f"Similarity Score: {score}\n"
+                f"Content: {doc.page_content}"
+                for doc, score in context_docs_with_scores
+            ])
+            
+            # Prepare detailed results with metadata and scores
+            detailed_results = []
+            for doc, score in context_docs_with_scores:
+                detailed_results.append({
+                    "doc_name": doc.metadata.get('source', 'Unknown'),
+                    "page": doc.metadata.get('page', 1),
+                    "chunk_id": doc.metadata.get('chunk_id', 'unknown_chunk_0000'),
+                    "similarity_score": float(score),
+                    "content": doc.page_content
+                })
             
             result = {
                 "original_response": original_content,
+                "detailed_results": detailed_results,
                 "translation": None,
                 "source_language": query_language
             }
@@ -165,14 +204,33 @@ class FocusedRAGPipeline:
         print(f"🌐 Translated query: {translated_query}")
         
         # Retrieve relevant documents
-        context_docs = self.retriever.retrieve(translated_query)
-        print(f"🔍 Retrieved {len(context_docs)} documents")
+        context_results = self.retriever.retrieve(translated_query)
+        print(f"🔍 Retrieved {len(context_results)} documents")
         
-        # Prepare context string with citations
-        context_str = "\n\n".join(
-            [f"📑 Source: {doc.metadata.get('source', 'Unknown')}\nContent: {doc.page_content}"
-             for doc in context_docs]
-        )
+        # Convert results to tuples for backward compatibility
+        context_docs_with_scores = [
+            (Document(page_content=result['content'], metadata=result['metadata']), result['score'])
+            for result in context_results
+        ]
+        
+        # Prepare context string with citations and scores
+        context_str = "\n\n".join([
+            f"📑 Source: {doc.metadata.get('source', 'Unknown')}\n"
+            f"Similarity Score: {score}\n"
+            f"Content: {doc.page_content}"
+            for doc, score in context_docs_with_scores
+        ])
+        
+        # Prepare detailed results with metadata and scores
+        detailed_results = []
+        for doc, score in context_docs_with_scores:
+            detailed_results.append({
+                "doc_name": doc.metadata.get('source', 'Unknown'),
+                "page": doc.metadata.get('page', 1),
+                "chunk_id": doc.metadata.get('chunk_id', 'unknown_chunk_0000'),
+                "similarity_score": float(score),
+                "content": doc.page_content
+            })
         
         # Prepare language-specific instructions
         if self.language == "ar":
@@ -207,6 +265,7 @@ class FocusedRAGPipeline:
         
         result = {
             "original_response": response,
+            "detailed_results": detailed_results,
             "translation": translation,
             "source_language": query_language
         }

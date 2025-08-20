@@ -32,17 +32,15 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 def get_cache_key(path: str, language: str = "en") -> str:
     """Generate a cache key based on path and language"""
-    # Get all file paths and their modification times
-    file_info = []
-    for file_path in Path(path).rglob('*'):
-        if file_path.is_file():
-            file_info.append((str(file_path), file_path.stat().st_mtime))
+    # Get directory modification time for quick change detection
+    try:
+        dir_mtime = Path(path).stat().st_mtime
+    except OSError:
+        # If we can't get directory mtime, fall back to current time
+        dir_mtime = time.time()
     
-    # Sort by file path for consistent hashing
-    file_info.sort(key=lambda x: x[0])
-    
-    # Create hash of all file paths and modification times
-    hash_input = f"{path}_{language}_" + "_".join([f"{fp}:{int(mt)}" for fp, mt in file_info])
+    # Create hash based on directory path, language, and directory modification time
+    hash_input = f"{path}_{language}_{int(dir_mtime)}"
     return hashlib.md5(hash_input.encode()).hexdigest()
 
 def save_to_cache(key: str, data) -> str:
@@ -72,7 +70,7 @@ def is_cache_valid(key: str) -> bool:
 
 def ocr_pdf(file_path, language):
     """Extract text from PDF using OCR"""
-    tesseract_lang = LANGUAGE_MAP.get(language, "eng")
+    tesseract_lang = LANGUAGE_MAP.get(language, "ara")
     images = convert_from_path(file_path)
     full_text = ""
     for i, img in enumerate(images):
@@ -80,23 +78,27 @@ def ocr_pdf(file_path, language):
         full_text += f"Page {i+1}:\n{text}\n\n"
     return full_text
 
-def load_documents(path, language="en"):
+def load_documents(path, language="ar"):
     """Load and process documents from directory with caching"""
     # Generate cache key
     cache_key = get_cache_key(path, language)
+    cache_file_key = f"documents_{cache_key}"
     
     # Try to load from cache first
-    cached_data = load_from_cache(f"documents_{cache_key}")
+    cached_data = load_from_cache(cache_file_key)
     if cached_data is not None:
         print("📄 Loaded documents from cache")
+        print(f"   Cache key: {cache_key}")
         return cached_data
     
     print("🔄 Loading and processing documents...")
-    tesseract_lang = LANGUAGE_MAP.get(language, "eng")
+    print(f"   Cache key: {cache_key}")
+    tesseract_lang = LANGUAGE_MAP.get(language, "ara")
     loaders = {
         '.pdf': UnstructuredLoader,
         '.docx': UnstructuredLoader,
-        '.doc': UnstructuredLoader
+        '.doc': UnstructuredLoader,
+        '.txt': UnstructuredLoader
     }
     documents = []
     
@@ -158,8 +160,9 @@ def load_documents(path, language="en"):
     
     # Save to cache
     try:
-        save_to_cache(f"documents_{cache_key}", documents)
+        save_to_cache(cache_file_key, documents)
         print("💾 Saved documents to cache")
+        print(f"   Cache key: {cache_key}")
     except Exception as e:
         print(f"Warning: Could not save documents to cache: {str(e)}")
     
@@ -185,6 +188,21 @@ def chunk_text(docs, chunk_size=1024, overlap=128):
         add_start_index=True
     )
     chunks = splitter.split_documents(docs)
+    
+    # Add page_id and chunk_id to metadata
+    for i, chunk in enumerate(chunks):
+        # Extract page number from metadata if available
+        page_number = chunk.metadata.get('page', 1)
+        
+        # Add page_id to metadata
+        chunk.metadata['page'] = page_number
+        
+        # Add chunk_id to metadata
+        source = chunk.metadata.get('source', 'unknown')
+        # Extract filename without extension
+        filename = os.path.basename(source)
+        filename_without_ext = os.path.splitext(filename)[0]
+        chunk.metadata['chunk_id'] = f"{filename_without_ext}_chunk_{i:04d}"
     
     # Save to cache
     save_to_cache(f"chunks_{cache_key}", chunks)

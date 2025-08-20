@@ -51,17 +51,23 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 
 # Initialize pipeline
 PIPELINE = None
+_PIPELINE_INITIALIZED = False
 
 @app.on_event("startup")
 async def startup_event():
-    global PIPELINE
+    global PIPELINE, _PIPELINE_INITIALIZED
+    # Check if pipeline is already initialized
+    if _PIPELINE_INITIALIZED and PIPELINE is not None:
+        print("⏭️ Pipeline already initialized, skipping initialization")
+        return
+        
     try:
         docs_path = os.getenv("DOCS_PATH", "./documents")
-        docs_lang = os.getenv("DOCS_LANG", "en")
+        docs_lang = os.getenv("DOCS_LANG", "ar")
         print(f"Starting RAG pipeline initialization with docs_path={docs_path}, docs_lang={docs_lang}")
         
         # Check Ollama connectivity before initializing pipeline
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         print(f"Checking Ollama connectivity at {ollama_base_url}...")
         try:
             import requests
@@ -97,6 +103,7 @@ async def startup_event():
                 result = future.result(timeout=300)  # 5 minute timeout
                 if result:
                     print("Pipeline initialization completed successfully")
+                    _PIPELINE_INITIALIZED = True
             except concurrent.futures.TimeoutError:
                 print("❌ Pipeline initialization timed out after 5 minutes")
                 PIPELINE = None
@@ -135,8 +142,17 @@ async def invoke_endpoint(input: ToolInput):
         raise HTTPException(status_code=500, detail="Pipeline failed to initialize")
     try:
         result = PIPELINE.query(input.query, input.target_lang, input.return_original)
+        
+        # If return_original is True, return the new format directly
+        if input.return_original:
+            # Serialize JSON with ensure_ascii=False to prevent Unicode escaping
+            #json_content = json.dumps(result, ensure_ascii=False)
+            return JSONResponse(content=result, media_type="application/json; charset=utf-8")
+        
+        # Otherwise, return the original format with detailed results
         response_data = {
             "response": result["original_response"],
+            "detailed_results": result.get("detailed_results", []),
             "translation": result.get("translation"),
             "source_language": result["source_language"]
         }
@@ -144,10 +160,9 @@ async def invoke_endpoint(input: ToolInput):
         if input.target_lang is not None:
             response_data["target_language"] = input.target_lang
         # Serialize JSON with ensure_ascii=False to prevent Unicode escaping
-        json_content = json.dumps(response_data, ensure_ascii=False)
-        print("السورية من شأنه أن يشكل انتهاكاً للاتفاقية.")
-        print(json_content)
-        return JSONResponse(content=json_content, media_type="application/json; charset=utf-8")
+        #json_content = json.dumps(response_data, ensure_ascii=False)
+        #print(json_content)
+        return JSONResponse(content=response_data, media_type="application/json; charset=utf-8")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

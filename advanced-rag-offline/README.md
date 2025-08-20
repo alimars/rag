@@ -41,7 +41,7 @@ The RAG pipeline now includes an intelligent caching system that dramatically re
 1. **Document Processing Cache**: Processed documents are cached with keys based on file paths and modification times
 2. **Text Chunking Cache**: Document chunks are cached to avoid re-chunking on subsequent runs
 3. **RAPTOR Clustering Cache**: Hierarchical document clusters are cached to avoid recomputation
-4. **Index Cache**: Vector indexes are cached where possible (Chroma indexes are rebuilt but BM25 index is cached)
+4. **Index Cache**: Vector indexes are cached where possible (FAISS indexes are rebuilt but BM25 index is cached)
 5. **Query Response Cache**: Complete query responses are cached to avoid reprocessing identical queries
 6. **Retrieval Cache**: Document retrieval results are cached to avoid recomputing retrieval for identical queries
 
@@ -77,7 +77,7 @@ Query response time is also significantly improved for repeated queries, as comp
 
 - `DOCS_PATH` - Path to documents directory (default: /app/documents)
 - `DOCS_LANG` - Document language (default: en)
-- `OLLAMA_BASE_URL` - Ollama service URL (default: http://ollama:11434)
+- `OLLAMA_BASE_URL` - Ollama service URL (default: http://localhost:11434)
 - `GENERATOR_MODEL` - Response generation model (default: llama3:8b)
 - `RERANKER_MODEL` - Re-ranking model (default: mxbai-rerank-large)
 - `QUERY_TRANSFORMER_MODEL` - Query transformation model (default: llama3:8b)
