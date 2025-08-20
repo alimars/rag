@@ -5,7 +5,7 @@ import os
 
 class QueryTransformer:
     def __init__(self):
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         query_transformer_model = os.getenv("QUERY_TRANSFORMER_MODEL", "llama3:8b")
         self.llm = OllamaLLM(model=query_transformer_model, base_url=ollama_base_url, temperature=0.3)
     

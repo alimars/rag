@@ -36,12 +36,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install additional PDF dependencies for unstructured
 RUN pip install --no-cache-dir pdfminer.six pdfplumber
 
-# Install FAISS CPU
-RUN pip install faiss-cpu
-
-# Install additional dependencies for better error handling
-RUN pip install requests
-
 # Copy application
 COPY . .
 

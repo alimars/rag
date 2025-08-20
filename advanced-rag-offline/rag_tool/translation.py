@@ -6,9 +6,9 @@ class OfflineTranslationSystem:
     def __init__(self):
         print("Initializing OfflineTranslationSystem...")
         import os
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         print(f"Using Ollama base URL for translator: {ollama_base_url}")
-        translator_model = os.getenv("TRANSLATOR_MODEL", "mistral-nemo:12b")
+        translator_model = os.getenv("TRANSLATOR_MODEL", "mistral-nemo:latest")
         print(f"Using translator model: {translator_model}")
         self.translator = OllamaLLM(model=translator_model, base_url=ollama_base_url)
         self.detector = langid
@@ -67,7 +67,7 @@ def embed_text(texts):
     os.makedirs(CACHE_DIR, exist_ok=True)
     
     # Generate cache key based on texts and model
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     embedding_model = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
     
     # Create a hash of the texts and model parameters

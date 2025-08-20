@@ -8,6 +8,7 @@ services:
   #     - "8080:8080"
   #   volumes:
   #     - open-webui:/app/backend/data
+  #     - ./custom_pdf_loader.py:/app/backend/extensions/custom_pdf_loader.py
   #   restart: unless-stopped
 
   rag-api:
@@ -20,10 +21,10 @@ services:
       - "8000:8000"
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - GENERATOR_MODEL=llama3:8b
+      - GENERATOR_MODEL=qwen2.5:7b-instruct
       - RERANKER_MODEL=qllama/bge-reranker-large:q4_k_m
-      - QUERY_TRANSFORMER_MODEL=llama3:8b
-      - TRANSLATOR_MODEL=mistral-nemo:12b
+      - QUERY_TRANSFORMER_MODEL=qwen2.5:7b-instruct
+      - TRANSLATOR_MODEL=qwen2.5:7b-instruct
       - EMBEDDING_MODEL=nomic-embed-text
       - DOCS_LANG=ar
     # networks:
