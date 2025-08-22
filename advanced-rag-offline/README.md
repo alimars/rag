@@ -77,9 +77,8 @@ Query response time is also significantly improved for repeated queries, as comp
 
 - `DOCS_PATH` - Path to documents directory (default: /app/documents)
 - `DOCS_LANG` - Document language (default: en)
-- `OLLAMA_BASE_URL` - Ollama service URL (default: http://ollama:11434)
+- `OLLAMA_BASE_URL` - Ollama service URL (default: http://localhost:11434)
 - `GENERATOR_MODEL` - Response generation model (default: llama3:8b)
-- `RERANKER_MODEL` - Re-ranking model (default: mxbai-rerank-large)
 - `QUERY_TRANSFORMER_MODEL` - Query transformation model (default: llama3:8b)
 - `TRANSLATOR_MODEL` - Translation model (default: mistral-nemo:12b)
-- `EMBEDDING_MODEL` - Embedding model (default: nomic-embed-text)
+- `EMBEDDING_MODEL` - Embedding model (default: jeffh/intfloat-multilingual-e5-large-instruct:Q8_0)

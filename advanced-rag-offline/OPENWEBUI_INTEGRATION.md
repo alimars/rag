@@ -111,10 +111,9 @@ Environment variables can be set to customize the RAG tool:
 - `DOCS_LANG`: Default language of documents (default: en)
 - `OLLAMA_BASE_URL`: Ollama service URL (default: http://host.docker.internal:11434)
 - `GENERATOR_MODEL`: Model for answer generation (default: llama3:8b)
-- `RERANKER_MODEL`: Model for result reranking (default: mxbai-rerank-large)
 - `QUERY_TRANSFORMER_MODEL`: Model for query transformation (default: llama3:8b)
 - `TRANSLATOR_MODEL`: Model for translation (default: mistral-nemo:12b)
-- `EMBEDDING_MODEL`: Model for text embeddings (default: nomic-embed-text)
+- `EMBEDDING_MODEL`: Model for text embeddings (default: jeffh/intfloat-multilingual-e5-large-instruct:Q8_0)
 
 ## Troubleshooting
 

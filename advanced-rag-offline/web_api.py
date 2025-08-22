@@ -12,56 +12,18 @@ import json
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
 
-app = FastAPI(
-    title="Offline RAG Pipeline",
-    description="Private RAG system with translation and advanced retrieval",
-    version="1.0"
-)
+from contextlib import asynccontextmanager
 
-# Ensure UTF-8 encoding for all JSON responses
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/")
-def root():
-    return {
-        "message": "Offline RAG Pipeline API",
-        "docs": "/docs",
-        "health": "/health",
-        "query": "POST /query"
-    }
-
-class QueryRequest(BaseModel):
-    text: str
-    target_lang: str = None
-    return_original: bool = False
-
-class ToolInput(BaseModel):
-    query: str
-    target_lang: Optional[str] = None
-    return_original: bool = False
-
-# Cache directory
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
-
-# Initialize pipeline
-PIPELINE = None
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global PIPELINE
     try:
         docs_path = os.getenv("DOCS_PATH", "./documents")
-        docs_lang = os.getenv("DOCS_LANG", "en")
+        docs_lang = os.getenv("DOCS_LANG", "ar")
         print(f"Starting RAG pipeline initialization with docs_path={docs_path}, docs_lang={docs_lang}")
         
         # Check Ollama connectivity before initializing pipeline
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         print(f"Checking Ollama connectivity at {ollama_base_url}...")
         try:
             import requests
@@ -105,10 +67,50 @@ async def startup_event():
         print(f"❌ Pipeline initialization failed: {str(e)}")
         import traceback
         print(f"Traceback: {traceback.format_exc()}")
-        # We'll set PIPELINE to None to indicate initialization failure
         PIPELINE = None
-        # Note: In a production environment, you might want to exit here
-        # but for debugging purposes, we'll continue to allow health checks
+    yield
+
+app = FastAPI(
+    title="Offline RAG Pipeline",
+    description="Private RAG system with translation and advanced retrieval",
+    version="1.0",
+    lifespan=lifespan
+)
+
+# Ensure UTF-8 encoding for all JSON responses
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+def root():
+    return {
+        "message": "Offline RAG Pipeline API",
+        "docs": "/docs",
+        "health": "/health",
+        "query": "POST /query"
+    }
+
+class QueryRequest(BaseModel):
+    text: str
+    target_lang: str = None
+    return_original: bool = False
+
+class ToolInput(BaseModel):
+    query: str
+    target_lang: Optional[str] = None
+    return_original: bool = False
+
+# Cache directory
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+
+# Initialize pipeline
+PIPELINE = None
+
 
 # @app.post("/query")
 # async def query_endpoint(request: QueryRequest):
@@ -134,7 +136,7 @@ async def invoke_endpoint(input: ToolInput):
     if PIPELINE is None:
         raise HTTPException(status_code=500, detail="Pipeline failed to initialize")
     try:
-        result = PIPELINE.query(input.query, input.target_lang, input.return_original)
+        result = PIPELINE.query(input.query, input.target_lang)
         response_data = {
             "response": result["original_response"],
             "translation": result.get("translation"),
@@ -144,10 +146,9 @@ async def invoke_endpoint(input: ToolInput):
         if input.target_lang is not None:
             response_data["target_language"] = input.target_lang
         # Serialize JSON with ensure_ascii=False to prevent Unicode escaping
-        json_content = json.dumps(response_data, ensure_ascii=False)
-        print("السورية من شأنه أن يشكل انتهاكاً للاتفاقية.")
+        json_content = json.dumps(result, ensure_ascii=False)
         print(json_content)
-        return JSONResponse(content=json_content, media_type="application/json; charset=utf-8")
+        return JSONResponse(content=result, media_type="application/json; charset=utf-8")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -172,16 +173,54 @@ def health_check():
 @app.post("/cache/clear")
 def clear_cache():
     """Clear all cached data"""
+    from rag_tool.indexing import MultiRepresentationIndex
+    
     if os.path.exists(CACHE_DIR):
         try:
-            # Instead of removing the directory, remove only its contents
-            # This avoids issues with Docker volume mounts
-            for filename in os.listdir(CACHE_DIR):
-                file_path = os.path.join(CACHE_DIR, filename)
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
+            # Properly close Chroma clients and clean up persistence directories
+            if PIPELINE and PIPELINE.index:
+                PIPELINE.index.close()
+                
+            # Remove Chroma persistence directories
+            chroma_dirs = [d for d in os.listdir(CACHE_DIR) if d.startswith("chroma_")]
+            for dir_name in chroma_dirs:
+                dir_path = os.path.join(CACHE_DIR, dir_name)
+                try:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+                except Exception as e:
+                    print(f"Warning: Error removing Chroma directory {dir_path}: {str(e)}")
+
+            # Handle Windows file locking issues
+            def safe_delete(path):
+                try:
+                    if os.path.isfile(path) or os.path.islink(path):
+                        os.unlink(path)
+                    elif os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                except Exception as e:
+                    print(f"Warning: Error deleting {path}: {str(e)}")
+                    # Force delete on Windows after short delay
+                    if os.name == 'nt':
+                        import time
+                        time.sleep(0.5)
+                        try:
+                            os.unlink(path)
+                        except:
+                            pass
+
+            # Retry mechanism for stubborn files
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    for filename in os.listdir(CACHE_DIR):
+                        file_path = os.path.join(CACHE_DIR, filename)
+                        safe_delete(file_path)
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(0.5 * (attempt + 1))
+
             return {"message": "Cache cleared successfully"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")

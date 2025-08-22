@@ -51,7 +51,7 @@ class OfflineTranslationSystem:
             print(f"Translating query from {q_lang} to {doc_language}")
             return self.translate(query, doc_language)
         return query
-
+    
 def embed_text(texts):
     """Embed texts with caching to prevent unnecessary API calls"""
     import os
@@ -59,6 +59,7 @@ def embed_text(texts):
     import pickle
     import concurrent.futures
     import threading
+    import time
     
     print(f"📝 embed_text called with {len(texts)} texts")
     
@@ -68,7 +69,7 @@ def embed_text(texts):
     
     # Generate cache key based on texts and model
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    embedding_model = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+    embedding_model = os.getenv("EMBEDDING_MODEL", "jeffh/intfloat-multilingual-e5-large:Q8_0")
     
     # Create a hash of the texts and model parameters
     hash_input = f"{sorted(texts)}_{ollama_base_url}_{embedding_model}"
@@ -92,23 +93,63 @@ def embed_text(texts):
     # Define embedding function with timeout
     def do_embedding():
         try:
+            print(f"🔧 Initializing OllamaEmbeddings with model: {embedding_model} and base_url: {ollama_base_url}")
             embeddings = OllamaEmbeddings(
                 model=embedding_model,
                 base_url=ollama_base_url
             )
-            return embeddings.embed_documents(texts)
+            print(f"🔧 OllamaEmbeddings initialized successfully")
+            
+            # Check if texts list is empty
+            if not texts:
+                print("⚠️  No texts to embed, returning empty list")
+                return []
+            
+            print(f"🔧 Starting embedding of {len(texts)} texts")
+            result = embeddings.embed_documents(texts)
+            print(f"🔧 Embedding completed successfully for {len(texts)} texts")
+            
+            # Validate result
+            if result is None:
+                print("⚠️  Embedding result is None")
+                raise ValueError("Embedding result is None")
+            
+            if not isinstance(result, list):
+                print(f"⚠️  Embedding result is not a list: {type(result)}")
+                raise ValueError(f"Embedding result is not a list: {type(result)}")
+            
+            print(f"🔧 Returning {len(result)} embeddings")
+            return result
         except Exception as e:
-            print(f"Error creating embeddings: {str(e)}")
+            print(f"❌ Error creating embeddings: {str(e)}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
             raise
     
     # Run embedding with timeout
     try:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(do_embedding)
-            result = future.result(timeout=120)  # 2 minute timeout
-            print(f"Successfully embedded {len(texts)} texts")
-            
-            # Save to cache
+        # Retry logic with exponential backoff
+        max_retries = 3
+        base_delay = 5  # seconds
+        result = None
+        
+        for attempt in range(max_retries):
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(do_embedding)
+                    result = future.result(timeout=120 * (attempt + 1))  # Increase timeout with each attempt
+                print(f"Successfully embedded {len(texts)} texts")
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"⚠️ Embedding attempt {attempt + 1} failed: {str(e)}")
+                print(f"🔄 Retrying in {base_delay * (2 ** attempt)} seconds...")
+                time.sleep(base_delay * (2 ** attempt))
+        
+        # Save to cache if we have a result
+        if result is not None:
             try:
                 with open(cache_file, 'wb') as f:
                     pickle.dump(result, f)
@@ -117,6 +158,9 @@ def embed_text(texts):
                 print(f"Warning: Could not save embeddings to cache: {str(e)}")
             
             return result
+        else:
+            print("❌ Failed to generate embeddings after all retries")
+            return None
     except concurrent.futures.TimeoutError:
         print(f"❌ Embedding timed out after 2 minutes")
         raise Exception(f"Embedding operation timed out. This might be due to a large number of texts ({len(texts)}) or connectivity issues with Ollama.")

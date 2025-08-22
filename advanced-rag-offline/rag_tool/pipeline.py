@@ -12,14 +12,14 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 class FocusedRAGPipeline:
-    def __init__(self, data_path, language="en"):
+    def __init__(self, data_path, language="ar"):
         self.data_path = data_path
         self.language = language
         self.index = None
         self.retriever = None
         print("Initializing generator with llama3:8b model...")
         import os
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         generator_model = os.getenv("GENERATOR_MODEL", "llama3:8b")
         print(f"Using Ollama base URL for generator: {ollama_base_url}")
         print(f"Using generator model: {generator_model}")

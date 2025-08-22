@@ -1,7 +1,12 @@
+import sys
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pytesseract
 from pdf2image import convert_from_path
 from langchain_unstructured import UnstructuredLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_core.documents import Document
 from pathlib import Path
 import numpy as np
@@ -12,6 +17,9 @@ import pickle
 import hashlib
 import time
 from typing import List, Tuple
+import langid
+from langdetect import detect, detect_langs
+import re
 
 # Map language codes to Tesseract codes
 LANGUAGE_MAP = {
@@ -25,6 +33,77 @@ LANGUAGE_MAP = {
     "ar": "ara",
     "ru": "rus"
 }
+
+def detect_document_language(text):
+    """Detect document language using hybrid approach with langid and langdetect"""
+    # Handle edge cases
+    if not text or not text.strip():
+        return "en"  # Default to English for empty text
+    
+    # For very short text, it's hard to detect language accurately
+    if len(text.strip()) < 10:
+        return "en"  # Default to English for very short text
+    
+    # Check if text contains Arabic characters using Unicode ranges
+    def contains_arabic(text):
+        arabic_pattern = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+        return bool(arabic_pattern.search(text))
+    
+    # Check if text is primarily Arabic
+    def is_arabic_dominant(text):
+        arabic_chars = len(re.findall(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', text))
+        total_chars = len(re.findall(r'\S', text))  # Non-whitespace characters
+        return arabic_chars > total_chars * 0.3 if total_chars > 0 else False
+    
+    try:
+        # First check if text contains Arabic characters
+        if contains_arabic(text):
+            # If text is primarily Arabic, favor Arabic detection
+            if is_arabic_dominant(text):
+                return "ar"
+        
+        # Use both langid and langdetect for better accuracy
+        langid_result = langid.classify(text)
+        langid_lang, langid_confidence = langid_result
+        
+        # Get langdetect results with probabilities
+        try:
+            langdetect_results = detect_langs(text)
+            langdetect_lang = langdetect_results[0].lang
+            langdetect_confidence = langdetect_results[0].prob
+        except:
+            # If langdetect fails, use langid result
+            langdetect_lang = langid_lang
+            langdetect_confidence = 0.0
+        
+        # Confidence-based decision making
+        # If one method is very confident, use it
+        if langid_confidence > 0.9:
+            selected_lang = langid_lang
+        elif langdetect_confidence > 0.9:
+            selected_lang = langdetect_lang
+        # If both methods agree, use the result
+        elif langid_lang == langdetect_lang:
+            selected_lang = langid_lang
+        # If one method detected Arabic and text contains Arabic characters, favor Arabic
+        elif (langid_lang == "ar" or langdetect_lang == "ar") and contains_arabic(text):
+            selected_lang = "ar"
+        # If confidence levels are close, use the one with higher confidence
+        elif langid_confidence >= langdetect_confidence:
+            selected_lang = langid_lang
+        else:
+            selected_lang = langdetect_lang
+        
+        # Check if the detected language is in our supported languages
+        if selected_lang in LANGUAGE_MAP:
+            return selected_lang
+        else:
+            # Default to English if language is not supported
+            return "en"
+    except Exception as e:
+        # If language detection fails, default to English
+        print(f"Language detection failed: {str(e)}. Defaulting to English.")
+        return "en"
 
 # Cache directory
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
@@ -80,10 +159,119 @@ def ocr_pdf(file_path, language):
         full_text += f"Page {i+1}:\n{text}\n\n"
     return full_text
 
-def load_documents(path, language="en"):
+def load_documents(path, language="ar"):
     """Load and process documents from directory with caching"""
     # Generate cache key
     cache_key = get_cache_key(path, language)
+    
+    # Try to load from cache first
+    cached_data = load_from_cache(f"documents_{cache_key}")
+    if cached_data is not None:
+        print("📄 Loaded documents from cache")
+        return cached_data
+    
+    print("🔄 Loading and processing documents...")
+    tesseract_lang = LANGUAGE_MAP.get(language, "ara")
+    loaders = {
+        '.pdf': UnstructuredLoader,
+        '.docx': UnstructuredLoader,
+        '.doc': UnstructuredLoader
+    }
+    documents = []
+    
+    import concurrent.futures
+    import time
+    
+    # Process files with timeout
+    file_paths = list(Path(path).rglob('*'))
+    total_files = len([fp for fp in file_paths if fp.suffix.lower() in loaders])
+    processed_files = 0
+    
+    for file_path in file_paths:
+        if file_path.suffix.lower() in loaders:
+            processed_files += 1
+            print(f"Processing file {processed_files}/{total_files}: {file_path.name}")            
+            def process_file(fp):
+                try:
+                    if fp.suffix.lower() == '.pdf':
+                        try:
+                            loader = UnstructuredLoader(str(fp))
+                            docs = loader.load()
+                            if docs and docs[0].page_content.strip():
+                                # Combine all documents from the same file into a single document
+                                combined_content = "\n\n".join([doc.page_content for doc in docs])
+                                combined_metadata = docs[0].metadata.copy()
+                                combined_metadata["source"] = str(fp)
+                                
+                                # Detect language for the document
+                                detected_language = detect_document_language(combined_content)
+                                combined_metadata["language"] = detected_language
+                                
+                                print(f"Detected language for {fp.name}: {detected_language}")
+                                return [Document(page_content=combined_content, metadata=combined_metadata)]
+                        except Exception as e:
+                            print(f"UnstructuredLoader failed for {fp}: {str(e)}")
+                            pass
+                        # If UnstructuredLoader fails, use OCR with detected language
+                        # For OCR, we'll use a default language for now, as we don't have text to detect language from
+                        # In a more advanced implementation, we could do OCR first, then detect language
+                        text = ocr_pdf(str(fp), "ara")  # Default to Arabic for OCR
+                        metadata = {"source": str(fp)}
+                        
+                        # Detect language for the document
+                        detected_language = detect_document_language(text)
+                        metadata["language"] = detected_language
+                        
+                        print(f"Detected language for {fp.name} using OCR: {detected_language}")
+                        return [Document(page_content=text, metadata=metadata)]
+                    else:
+                        loader = UnstructuredLoader(str(fp))
+                        docs = loader.load()
+                        if docs:
+                            # Combine all documents from the same file into a single document
+                            combined_content = "\n\n".join([doc.page_content for doc in docs])
+                            combined_metadata = docs[0].metadata.copy()
+                            combined_metadata["source"] = str(fp)
+                            
+                            # Detect language for the document
+                            detected_language = detect_document_language(combined_content)
+                            combined_metadata["language"] = detected_language
+                            
+                            print(f"Detected language for {fp.name}: {detected_language}")
+                            return [Document(page_content=combined_content, metadata=combined_metadata)]
+                        return docs
+                except Exception as e:
+                    print(f"Error processing {fp}: {str(e)}")
+                    # Return empty list to continue with other files
+                    return []
+            
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(process_file, file_path)
+                    file_docs = future.result(timeout=300)  # 5 minute timeout per file
+                    documents.extend(file_docs)
+                    print(f"✅ Processed {file_path.name} successfully")
+            except concurrent.futures.TimeoutError:
+                print(f"❌ Processing {file_path.name} timed out after 5 minutes")
+                print(f"⚠️  This file might be too large or corrupted. Consider splitting it into smaller parts.")
+                # Continue with other files instead of failing completely
+                continue
+            except Exception as e:
+                print(f"❌ Failed to process {file_path.name}: {str(e)}")
+                # Continue with other files instead of failing completely
+                continue
+    
+    # Save to cache
+    try:
+        save_to_cache(f"documents_{cache_key}", documents)
+        print("💾 Saved documents to cache")
+    except Exception as e:
+        print(f"Warning: Could not save documents to cache: {str(e)}")
+    
+    # Filter complex metadata to avoid issues with Chroma
+    filtered_documents = filter_complex_metadata(documents)
+    
+    return filtered_documents
     
     # Try to load from cache first
     cached_data = load_from_cache(f"documents_{cache_key}")
@@ -111,38 +299,61 @@ def load_documents(path, language="en"):
     for file_path in file_paths:
         if file_path.suffix.lower() in loaders:
             processed_files += 1
-            print(f"Processing file {processed_files}/{total_files}: {file_path.name}")
-            
-            def process_file():
+            print(f"Processing file {processed_files}/{total_files}: {file_path.name}")            
+            def process_file(fp):
                 try:
-                    if file_path.suffix.lower() == '.pdf':
+                    if fp.suffix.lower() == '.pdf':
                         try:
-                            loader = UnstructuredLoader(str(file_path))
+                            loader = UnstructuredLoader(str(fp))
                             docs = loader.load()
                             if docs and docs[0].page_content.strip():
-                                for doc in docs:
-                                    doc.metadata["source"] = str(file_path)
-                                return docs
+                                # Combine all documents from the same file into a single document
+                                combined_content = "\n\n".join([doc.page_content for doc in docs])
+                                combined_metadata = docs[0].metadata.copy()
+                                combined_metadata["source"] = str(fp)
+                                
+                                # Detect language for the document
+                                detected_language = detect_document_language(combined_content)
+                                combined_metadata["language"] = detected_language
+                                
+                                return [Document(page_content=combined_content, metadata=combined_metadata)]
                         except Exception as e:
-                            print(f"UnstructuredLoader failed for {file_path}: {str(e)}")
+                            print(f"UnstructuredLoader failed for {fp}: {str(e)}")
                             pass
-                        text = ocr_pdf(str(file_path), language)
-                        metadata = {"source": str(file_path)}
+                        # If UnstructuredLoader fails, use OCR with detected language
+                        # For OCR, we'll use a default language for now, as we don't have text to detect language from
+                        # In a more advanced implementation, we could do OCR first, then detect language
+                        text = ocr_pdf(str(fp), "ara")  # Default to Arabic for OCR
+                        metadata = {"source": str(fp)}
+                        
+                        # Detect language for the document
+                        detected_language = detect_document_language(text)
+                        metadata["language"] = detected_language
+                        
                         return [Document(page_content=text, metadata=metadata)]
                     else:
-                        loader = UnstructuredLoader(str(file_path))
+                        loader = UnstructuredLoader(str(fp))
                         docs = loader.load()
-                        for doc in docs:
-                            doc.metadata["source"] = str(file_path)
+                        if docs:
+                            # Combine all documents from the same file into a single document
+                            combined_content = "\n\n".join([doc.page_content for doc in docs])
+                            combined_metadata = docs[0].metadata.copy()
+                            combined_metadata["source"] = str(fp)
+                            
+                            # Detect language for the document
+                            detected_language = detect_document_language(combined_content)
+                            combined_metadata["language"] = detected_language
+                            
+                            return [Document(page_content=combined_content, metadata=combined_metadata)]
                         return docs
                 except Exception as e:
-                    print(f"Error processing {file_path}: {str(e)}")
+                    print(f"Error processing {fp}: {str(e)}")
                     # Return empty list to continue with other files
                     return []
             
             try:
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(process_file)
+                    future = executor.submit(process_file, file_path)
                     file_docs = future.result(timeout=300)  # 5 minute timeout per file
                     documents.extend(file_docs)
                     print(f"✅ Processed {file_path.name} successfully")
@@ -163,7 +374,10 @@ def load_documents(path, language="en"):
     except Exception as e:
         print(f"Warning: Could not save documents to cache: {str(e)}")
     
-    return documents
+    # Filter complex metadata to avoid issues with Chroma
+    filtered_documents = filter_complex_metadata(documents)
+    
+    return filtered_documents
 
 def chunk_text(docs, chunk_size=1024, overlap=128):
     """Split documents into chunks with caching"""
@@ -189,6 +403,7 @@ def chunk_text(docs, chunk_size=1024, overlap=128):
     # Save to cache
     save_to_cache(f"chunks_{cache_key}", chunks)
     print("💾 Saved chunks to cache")
+    print(f"Generated {len(chunks)} chunks")
     return chunks
 
 def raptor_clustering(chunks, levels=3):
@@ -233,6 +448,7 @@ def raptor_clustering(chunks, levels=3):
         current_level = clusters
     
     # Save to cache
-    save_to_cache(f"raptor_{cache_key}", clustered_chunks)
-    print("💾 Saved RAPTOR clusters to cache")
-    return clustered_chunks
+    # Filter complex metadata to avoid issues with Chroma
+    filtered_clustered_chunks = filter_complex_metadata(clustered_chunks)
+    
+    return filtered_clustered_chunks

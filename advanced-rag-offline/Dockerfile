@@ -39,6 +39,10 @@ RUN pip install --no-cache-dir pdfminer.six pdfplumber
 # Copy application
 COPY . .
 
+# Convert line endings and make executable
+RUN sed -i 's/\r$//' ./start_rag.sh && \
+    chmod +x ./start_rag.sh
+
 # Make package installable
 RUN pip install -e .
 
@@ -55,10 +59,9 @@ ENV DOCS_PATH=/app/documents
 ENV DOCS_LANG=en
 ENV PORT=8000
 ENV GENERATOR_MODEL=llama3:8b
-ENV RERANKER_MODEL=mxbai-rerank-large
 ENV QUERY_TRANSFORMER_MODEL=llama3:8b
 ENV TRANSLATOR_MODEL=mistral-nemo:12b
-ENV EMBEDDING_MODEL=nomic-embed-text
+ENV EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:Q8_0
 
 EXPOSE 8000
 

@@ -13,9 +13,10 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 class RetrievalSystem:
     def __init__(self, index):
         self.index = index
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-        reranker_model = os.getenv("RERANKER_MODEL", "mxbai-rerank-large")
-        self.reranker = OllamaLLM(base_url=ollama_base_url, model=reranker_model, temperature=0)
+        print(f"🛠️ RetrievalSystem initialized with index: {type(index)}")
+        # Check if RAPTOR is enabled
+        if hasattr(index, 'raptor_index') and index.raptor_index is None:
+            print("⚠️  RAPTOR retrieval is currently disabled")
     
     def get_cache_key(self, query, top_k=10):
         """Generate a cache key based on query and parameters"""
@@ -87,20 +88,8 @@ class RetrievalSystem:
         fused = self.reciprocal_rank_fusion(all_rankings)
         fused_docs = [doc for doc_id, score, doc in fused[:top_k*2]]
         
-        # Re-ranking
-        rerank_prompt = "\n".join([
-            f"Document {i+1}: {doc.page_content[:500]}{'...' if len(doc.page_content) > 500 else ''}"
-            for i, doc in enumerate(fused_docs)
-        ])
-        rerank_prompt = f"Query: {query}\n\nRank these by relevance (comma-separated numbers 1-{len(fused_docs)}):\n{rerank_prompt}"
-        
-        try:
-            ranking_order = self.reranker.invoke(rerank_prompt)
-            ranked_ids = [int(x.strip()) - 1 for x in ranking_order.split(",")]
-            results = [fused_docs[i] for i in ranked_ids[:top_k]]
-        except Exception as e:
-            print(f"Re-ranking failed: {str(e)}")
-            results = fused_docs[:top_k]
+        # No reranking, just take top results from fusion
+        results = fused_docs[:top_k]
         
         # Save to cache
         self.save_to_cache(cache_key, results)

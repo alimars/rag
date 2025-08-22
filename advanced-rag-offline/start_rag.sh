@@ -5,17 +5,15 @@ DEFAULT_DOCS_PATH="/app/documents"
 DEFAULT_DOCS_LANG="en"
 DEFAULT_PORT=8000
 DEFAULT_GENERATOR_MODEL="llama3:8b"
-DEFAULT_RERANKER_MODEL="mxbai-rerank-large"
 DEFAULT_QUERY_TRANSFORMER_MODEL="llama3:8b"
 DEFAULT_TRANSLATOR_MODEL="mistral-nemo:12b"
-DEFAULT_EMBEDDING_MODEL="nomic-embed-text"
+DEFAULT_EMBEDDING_MODEL="jeffh/intfloat-multilingual-e5-large-instruct:Q8_0"
 
 # Use environment variables if set, otherwise use command-line arguments
 DOCS_PATH="${DOCS_PATH:-${1:-$DEFAULT_DOCS_PATH}}"
 DOCS_LANG="${DOCS_LANG:-${2:-$DEFAULT_DOCS_LANG}}"
 PORT="${PORT:-${3:-$DEFAULT_PORT}}"
 GENERATOR_MODEL="${GENERATOR_MODEL:-$DEFAULT_GENERATOR_MODEL}"
-RERANKER_MODEL="${RERANKER_MODEL:-$DEFAULT_RERANKER_MODEL}"
 QUERY_TRANSFORMER_MODEL="${QUERY_TRANSFORMER_MODEL:-$DEFAULT_QUERY_TRANSFORMER_MODEL}"
 TRANSLATOR_MODEL="${TRANSLATOR_MODEL:-$DEFAULT_TRANSLATOR_MODEL}"
 EMBEDDING_MODEL="${EMBEDDING_MODEL:-$DEFAULT_EMBEDDING_MODEL}"
@@ -33,7 +31,6 @@ echo "🌐 Document language: $DOCS_LANG"
 echo "🔒 Privacy: All processing offline"
 echo "🔤 Translation: Enabled ($TRANSLATOR_MODEL model)"
 echo "🧠 Generator model: $GENERATOR_MODEL"
-echo "🔄 Reranker model: $RERANKER_MODEL"
 echo "🔍 Query transformer model: $QUERY_TRANSFORMER_MODEL"
 echo "🔗 Embedding model: $EMBEDDING_MODEL"
 echo "💾 Caching: Enabled (persistent cache at ./cache)"
@@ -48,7 +45,6 @@ if [[ "$OLLAMA_BASE_URL" == *"host.docker.internal"* ]] || [[ "$OLLAMA_BASE_URL"
     echo "   - $EMBEDDING_MODEL"
     echo "   - $TRANSLATOR_MODEL"
     echo "   - $GENERATOR_MODEL"
-    echo "   - $RERANKER_MODEL"
     echo "   - $QUERY_TRANSFORMER_MODEL"
     
     # Check connectivity to remote Ollama
@@ -65,7 +61,6 @@ else
     ollama pull $EMBEDDING_MODEL
     ollama pull $TRANSLATOR_MODEL
     ollama pull $GENERATOR_MODEL
-    ollama pull $RERANKER_MODEL
     ollama pull $QUERY_TRANSFORMER_MODEL
 
     # Wait for Ollama to be ready
@@ -86,4 +81,4 @@ fi
 
 # Start the API
 echo "🚀 Starting the RAG API server..."
-uvicorn web_api:app --host 0.0.0.0 --port $PORT --env-file <(env | grep -E 'DOCS_PATH|DOCS_LANG|OLLAMA_BASE_URL|GENERATOR_MODEL|RERANKER_MODEL|QUERY_TRANSFORMER_MODEL|TRANSLATOR_MODEL|EMBEDDING_MODEL') 2>&1 | tee rag_api.log
+uvicorn web_api:app --host 0.0.0.0 --port $PORT --env-file <(env | grep -E 'DOCS_PATH|DOCS_LANG|OLLAMA_BASE_URL|GENERATOR_MODEL|QUERY_TRANSFORMER_MODEL|TRANSLATOR_MODEL|EMBEDDING_MODEL') 2>&1 | tee rag_api.log
