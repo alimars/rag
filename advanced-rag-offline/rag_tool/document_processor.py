@@ -32,15 +32,26 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 def get_cache_key(path: str, language: str = "en") -> str:
     """Generate a cache key based on path and language"""
-    # Get directory modification time for quick change detection
     try:
-        dir_mtime = Path(path).stat().st_mtime
+        dir_path = Path(path).resolve()  # Normalize to absolute path
+        dir_mtime = dir_path.stat().st_mtime
+        
+        # Get file list and modification times for more accurate change detection
+        file_stats = [
+            (f.name, f.stat().st_mtime)
+            for f in sorted(dir_path.rglob('*'))
+            if f.is_file()
+        ]
+        file_stats.sort(key=lambda x: x[0])  # Sort by filename for consistent ordering
+        file_hash = hashlib.md5(str(file_stats).encode()).hexdigest()
     except OSError:
-        # If we can't get directory mtime, fall back to current time
         dir_mtime = time.time()
+        file_hash = "error"
     
-    # Create hash based on directory path, language, and directory modification time
-    hash_input = f"{path}_{language}_{int(dir_mtime)}"
+    # Combine both directory mtime and file list hash for better change detection
+    hash_input = f"{str(dir_path)}_{language}_{int(dir_mtime)}_{file_hash}"
+    
+    
     return hashlib.md5(hash_input.encode()).hexdigest()
 
 def save_to_cache(key: str, data) -> str:
@@ -53,10 +64,14 @@ def save_to_cache(key: str, data) -> str:
 def load_from_cache(key: str):
     """Load data from cache file"""
     cache_file = os.path.join(CACHE_DIR, f"{key}.pkl")
+    
     if os.path.exists(cache_file):
+        
         try:
             with open(cache_file, 'rb') as f:
-                return pickle.load(f)
+                data = pickle.load(f)
+                
+                return data
         except Exception as e:
             print(f"Error loading cache {key}: {str(e)}")
             # Remove corrupted cache file
@@ -80,7 +95,8 @@ def ocr_pdf(file_path, language):
 
 def load_documents(path, language="ar"):
     """Load and process documents from directory with caching"""
-    # Generate cache key
+    # Normalize path and generate cache key
+    path = str(Path(path).resolve())  # Ensure consistent path format
     cache_key = get_cache_key(path, language)
     cache_file_key = f"documents_{cache_key}"
     
@@ -88,85 +104,87 @@ def load_documents(path, language="ar"):
     cached_data = load_from_cache(cache_file_key)
     if cached_data is not None:
         print("📄 Loaded documents from cache")
-        print(f"   Cache key: {cache_key}")
         return cached_data
-    
-    print("🔄 Loading and processing documents...")
-    print(f"   Cache key: {cache_key}")
-    tesseract_lang = LANGUAGE_MAP.get(language, "ara")
-    loaders = {
-        '.pdf': UnstructuredLoader,
-        '.docx': UnstructuredLoader,
-        '.doc': UnstructuredLoader,
-        '.txt': UnstructuredLoader
-    }
-    documents = []
-    
-    import concurrent.futures
-    import time
-    
-    # Process files with timeout
-    file_paths = list(Path(path).rglob('*'))
-    total_files = len([fp for fp in file_paths if fp.suffix.lower() in loaders])
-    processed_files = 0
-    
-    for file_path in file_paths:
-        if file_path.suffix.lower() in loaders:
-            processed_files += 1
-            print(f"Processing file {processed_files}/{total_files}: {file_path.name}")
-            
-            def process_file():
-                try:
-                    if file_path.suffix.lower() == '.pdf':
-                        try:
-                            loader = UnstructuredLoader(str(file_path))
-                            docs = loader.load()
-                            if docs and docs[0].page_content.strip():
-                                for doc in docs:
-                                    doc.metadata["source"] = str(file_path)
-                                return docs
-                        except Exception as e:
-                            print(f"UnstructuredLoader failed for {file_path}: {str(e)}")
-                            pass
-                        text = ocr_pdf(str(file_path), language)
-                        metadata = {"source": str(file_path)}
-                        return [Document(page_content=text, metadata=metadata)]
-                    else:
+    else:
+        
+        print("🔄 Loading and processing documents...")
+        tesseract_lang = LANGUAGE_MAP.get(language, "ara")
+        loaders = {
+            '.pdf': UnstructuredLoader,
+            '.docx': UnstructuredLoader,
+            '.doc': UnstructuredLoader,
+            '.txt': UnstructuredLoader
+        }
+        documents = []
+        
+        import concurrent.futures
+        import time
+        
+        # Process files with timeout
+        file_paths = list(sorted(Path(path).rglob('*')))
+        total_files = len([fp for fp in file_paths if fp.suffix.lower() in loaders])
+        processed_files = 0
+        
+        # Define process_file function outside the loop
+        def process_file(file_path):
+            try:
+                if file_path.suffix.lower() == '.pdf':
+                    try:
                         loader = UnstructuredLoader(str(file_path))
                         docs = loader.load()
-                        for doc in docs:
-                            doc.metadata["source"] = str(file_path)
-                        return docs
-                except Exception as e:
-                    print(f"Error processing {file_path}: {str(e)}")
-                    # Return empty list to continue with other files
-                    return []
-            
-            try:
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(process_file)
-                    file_docs = future.result(timeout=300)  # 5 minute timeout per file
-                    documents.extend(file_docs)
-                    print(f"✅ Processed {file_path.name} successfully")
-            except concurrent.futures.TimeoutError:
-                print(f"❌ Processing {file_path.name} timed out after 5 minutes")
-                print(f"⚠️  This file might be too large or corrupted. Consider splitting it into smaller parts.")
-                # Continue with other files instead of failing completely
-                continue
+                        if docs and docs[0].page_content.strip():
+                            # Combine all parts into a single document
+                            combined_content = "\n\n".join([doc.page_content for doc in docs if doc.page_content.strip()])
+                            combined_metadata = docs[0].metadata.copy()
+                            combined_metadata["source"] = str(file_path)
+                            return [Document(page_content=combined_content, metadata=combined_metadata)]
+                    except Exception as e:
+                        print(f"UnstructuredLoader failed for {file_path}: {str(e)}")
+                        pass
+                    text = ocr_pdf(str(file_path), language)
+                    metadata = {"source": str(file_path)}
+                    return [Document(page_content=text, metadata=metadata)]
+                else:
+                    loader = UnstructuredLoader(str(file_path))
+                    docs = loader.load()
+                    for doc in docs:
+                        doc.metadata["source"] = str(file_path)
+                    return docs
             except Exception as e:
-                print(f"❌ Failed to process {file_path.name}: {str(e)}")
-                # Continue with other files instead of failing completely
-                continue
-    
-    # Save to cache
-    try:
-        save_to_cache(cache_file_key, documents)
-        print("💾 Saved documents to cache")
-        print(f"   Cache key: {cache_key}")
-    except Exception as e:
-        print(f"Warning: Could not save documents to cache: {str(e)}")
-    
-    return documents
+                print(f"Error processing {file_path}: {str(e)}")
+                # Return empty list to continue with other files
+                return []
+        
+        for file_path in file_paths:
+            if file_path.suffix.lower() in loaders:
+                processed_files += 1
+                print(f"Processing file {processed_files}/{total_files}: {file_path.name}")
+                
+                try:
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(process_file, file_path)
+                        file_docs = future.result(timeout=300)  # 5 minute timeout per file
+                        documents.extend(file_docs)
+                        print(f"✅ Processed {file_path.name} successfully")
+                except concurrent.futures.TimeoutError:
+                    print(f"❌ Processing {file_path.name} timed out after 5 minutes")
+                    print(f"⚠️  This file might be too large or corrupted. Consider splitting it into smaller parts.")
+                    # Continue with other files instead of failing completely
+                    continue
+                except Exception as e:
+                    print(f"❌ Failed to process {file_path.name}: {str(e)}")
+                    # Continue with other files instead of failing completely
+                    continue
+        
+        # Save to cache
+        try:
+            save_to_cache(cache_file_key, documents)
+            print("💾 Saved documents to cache")
+            
+        except Exception as e:
+            print(f"Warning: Could not save documents to cache: {str(e)}")
+        
+        return documents
 
 def chunk_text(docs, chunk_size=1024, overlap=128):
     """Split documents into chunks with caching"""
@@ -222,23 +240,27 @@ def raptor_clustering(chunks, levels=3):
         return cached_data
     
     print(f"🌳 Building RAPTOR hierarchy...")
-    clustered_chunks = []
     embeddings = embed_text([c.page_content for c in chunks])
     print(f"Starting RAPTOR clustering for {len(chunks)} chunks")
     
     current_level = chunks
     for level in range(levels):
         if level == 0:
+            # For level 0, we keep the original chunks
             clusters = current_level
         else:
+            # For subsequent levels, we cluster the previous level
             if len(current_level) <= 10:
+                # If we have 10 or fewer chunks, don't cluster further
                 clusters = current_level
+                break
             else:
+                # Perform clustering
                 kmeans = KMeans(n_clusters=min(10, len(current_level)))
                 kmeans.fit(embeddings)
                 new_clusters = []
                 for cluster_idx in range(kmeans.n_clusters):
-                    cluster_indices = [i for i, label in enumerate(kmeans.labels_) 
+                    cluster_indices = [i for i, label in enumerate(kmeans.labels_)
                                      if label == cluster_idx]
                     cluster_texts = [current_level[i].page_content for i in cluster_indices]
                     cluster_content = "\n\n".join(cluster_texts)
@@ -247,10 +269,9 @@ def raptor_clustering(chunks, levels=3):
                     metadata["raptor_level"] = level
                     new_clusters.append(Document(page_content=cluster_content, metadata=metadata))
                 clusters = new_clusters
-        clustered_chunks.extend(clusters)
         current_level = clusters
     
-    # Save to cache
-    save_to_cache(f"raptor_{cache_key}", clustered_chunks)
+    # Save to cache - only return the final level of clusters
+    save_to_cache(f"raptor_{cache_key}", current_level)
     print("💾 Saved RAPTOR clusters to cache")
-    return clustered_chunks
+    return current_level
